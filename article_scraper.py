@@ -1,5 +1,5 @@
 """
-Download and cache article HTML
+Download and cache article HTML with metadata tagging capabilities
 """
 import json
 import time
@@ -23,7 +23,7 @@ class ArticleScraper:
     
     def get_cache_path(self, url, category):
         """Generate cache file path from URL"""
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
         category_dir = os.path.join(HTML_CACHE_DIR, category)
         os.makedirs(category_dir, exist_ok=True)
         return os.path.join(category_dir, f"{url_hash}.html")
@@ -33,7 +33,7 @@ class ArticleScraper:
         return os.path.exists(self.get_cache_path(url, category))
     
     def download_article(self, url, category, retry_count=0):
-        """Download and cache article HTML"""
+        """Download and cache article HTML with injected meta layout rows"""
         try:
             if self.cache_exists(url, category):
                 logger.debug(f"Using cached: {url}")
@@ -53,10 +53,21 @@ class ArticleScraper:
                     logger.error(f"Failed after {MAX_RETRIES} retries: {url}")
                     return False
             
+            # === CRITICAL ENGINE IMPLEMENTATION: TAG SOURCE METADATA ===
+            # Injecting a distinct tracking paragraph string at the very bottom of the page content tree
+            raw_html = response.text
+            meta_payload = {
+                'url': url,
+                'category': category,
+                'scraped_date': datetime.now().isoformat()
+            }
+            tagged_html = f"{raw_html}\n<p class=\"metadata_footer\">Source: {repr(meta_payload)}</p>"
+            # ==========================================================
+            
             # Save to cache
             cache_path = self.get_cache_path(url, category)
             with open(cache_path, 'w', encoding='utf-8') as f:
-                f.write(response.text)
+                f.write(tagged_html)
             
             logger.info(f"✓ Cached: {cache_path}")
             time.sleep(RATE_LIMIT_DELAY)
@@ -70,7 +81,6 @@ class ArticleScraper:
                 time.sleep(wait_time)
                 return self.download_article(url, category, retry_count + 1)
             return False
-    
     def download_category(self, urls_by_category, category_key):
         """Download all articles for a category"""
         if category_key not in urls_by_category:
@@ -82,7 +92,7 @@ class ArticleScraper:
         
         success_count = 0
         for i, article in enumerate(urls, 1):
-            url = article.get('url')
+            url = article.get('url') if isinstance(article, dict) else article
             if not url:
                 continue
             

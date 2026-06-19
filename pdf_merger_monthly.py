@@ -5,6 +5,8 @@ import logging
 import os
 import csv
 import re
+import json
+import ast
 from datetime import datetime
 from pathlib import Path
 from PyPDF2 import PdfWriter, PdfReader
@@ -13,7 +15,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
-from config import PDF_CACHE_DIR, MONTHLY_PDF_DIR, METADATA_DIR, CATEGORIES, HTML_CACHE_DIR
+from config import PDF_CACHE_DIR, MONTHLY_PDF_DIR, METADATA_DIR, CATEGORIES, HTML_CACHE_DIR, PROGRESS_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,7 @@ class PDFMergerMonthly:
             return None
 
     def extract_published_date_from_html(self, html_path):
-        """Extract historical publishing dates from HTML body text tokens"""
+        """Extract historical publishing dates from HTML body text tokens via regex"""
         try:
             with open(html_path, 'r', encoding='utf-8') as f:
                 raw_html = f.read()
@@ -120,7 +122,6 @@ class PDFMergerMonthly:
             text = re.sub(r'<[^>]+>', ' ', text)
             clean_text = ' '.join(text.split())
             
-            # Match date patterns like "June 7, 2026 | 4:24 PM" with typographic separators
             date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})\s*[\s\u2502\u007c:-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', clean_text)
             if date_match:
                 date_str = date_match.group(1).strip()
@@ -134,13 +135,28 @@ class PDFMergerMonthly:
         except Exception:
             pass
         return None
+    def parse_metadata_from_html_footer(self, html_path):
+        """Extracts the source URL from the preserved metadata block"""
+        try:
+            with open(html_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Extract content from our custom metadata line
+            if "Source: " in content:
+                start_idx = content.find("Source: ") + len("Source: ")
+                end_idx = content.find("</p>", start_idx)
+                meta_str = content[start_idx:end_idx].strip()
+                
+                meta_dict = ast.literal_eval(meta_str)
+                return meta_dict.get('url', '').lower().strip().rstrip('/')
+        except Exception:
+            pass
+        return ""
 
     def merge_by_month(self, category_key):
         """Processes and merges every file found in the category cache folder chronologically"""
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Map paths based on the category key parameter
             html_dir = os.path.join(HTML_CACHE_DIR, category_key.lower())
             pdf_dir = os.path.join(base_dir, 'cache', 'individual_pdfs', category_key.lower())
             
@@ -150,25 +166,54 @@ class PDFMergerMonthly:
             pdf_files = list(Path(pdf_dir).glob('*.pdf'))
             if not pdf_files:
                 return 0
+
+            # Load the original ordered URL list directly from progress.json
+            ordered_urls = []
+            try:
+                with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                    progress_data = json.load(f)
                 
+                discovered_list = progress_data.get('discovered_urls', {}).get(category_key, [])
+                if not discovered_list and category_key == 'politics' and 'politics' in progress_data:
+                    discovered_list = progress_data['politics']
+                
+                for item in discovered_list:
+                    if isinstance(item, dict) and 'url' in item:
+                        ordered_urls.append(item['url'].lower().strip().rstrip('/'))
+                    elif isinstance(item, str):
+                        ordered_urls.append(item.lower().strip().rstrip('/'))
+            except Exception as p_err:
+                logger.warning(f"Could not load progress data: {p_err}")
+
             dated_pdfs = []
-            logger.info(f"🔍 Timeline Scanning: Processing historical values for {category_key}...")
+            html_files = list(Path(html_dir).glob('*.html'))
             
             for p_path in pdf_files:
                 base_name = p_path.stem
                 matching_html = os.path.join(html_dir, f"{base_name}.html")
                 
+                actual_article_url = ""
                 pub_date = None
+                
                 if os.path.exists(matching_html):
+                    actual_article_url = self.parse_metadata_from_html_footer(matching_html)
                     pub_date = self.extract_published_date_from_html(matching_html)
+                
+                # Check where this URL stands in the site's stream order
+                sort_priority = 999
+                if actual_article_url:
+                    for idx, stream_url in enumerate(ordered_urls):
+                        if actual_article_url == stream_url:
+                            sort_priority = idx
+                            break
                 
                 if not pub_date:
                     pub_date = datetime.fromtimestamp(os.path.getmtime(p_path))
                 
-                # Capture all articles belonging to June 2026
                 if pub_date.year == 2026 and pub_date.month == 6:
                     dated_pdfs.append({
                         'date': pub_date,
+                        'priority': sort_priority,
                         'path': str(p_path),
                         'name': base_name
                     })
@@ -176,14 +221,12 @@ class PDFMergerMonthly:
             if not dated_pdfs:
                 return 0
                 
-            # Chronological descending sort (Newest first)
-            dated_pdfs.sort(key=lambda x: x['date'], reverse=True)
+            # Sort directly by live page position order!
+            dated_pdfs.sort(key=lambda x: x['priority'])
             
             logger.info(f"📋 Chronological Order Map for {category_key}:")
             for idx, item in enumerate(dated_pdfs[:5], 1):
-                logger.info(f"   [{idx}] {item['name']}.pdf ➔ {item['date'].strftime('%Y-%m-%d %I:%M %p')}")
-            if len(dated_pdfs) > 5:
-                logger.info(f"   ... [{len(dated_pdfs) - 5} additional documents sorted below] ...")
+                logger.info(f"   [{idx}] {item['name']}.pdf ➔ Published: {item['date'].strftime('%Y-%m-%d %I:%M %p')} [Position: {item['priority']}]")
                 
             sorted_pdf_paths = [item['path'] for item in dated_pdfs]
             
@@ -239,12 +282,8 @@ class PDFMergerMonthly:
             except Exception as e:
                 logger.error(f"Failed to save metadata log file: {e}")
 
-
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     merger = PDFMergerMonthly()
     merger.merge_all_categories()
 

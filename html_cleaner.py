@@ -3,6 +3,7 @@ Clean HTML: extract article content and remove ads/tracking
 """
 import logging
 import os
+import re
 from trafilatura import extract
 from bs4 import BeautifulSoup
 
@@ -16,12 +17,23 @@ class HTMLCleaner:
         Returns cleaned HTML with article content only
         """
         try:
+            # Preserve the OpIndia metadata line if it exists before trafilatura wipes it out
+            meta_line = ""
+            meta_match = re.search(r'(<p class="metadata_footer">Source:.*?</p>)', html_content)
+            if meta_match:
+                meta_line = meta_match.group(1)
+
             # Use trafilatura to extract main content
             extracted = extract(html_content, output_format='html', include_comments=False)
             
             if not extracted:
                 logger.warning(f"Could not extract content from {url}")
                 return None
+            
+            # === SURGICAL FIX: Strip away broken unescaped string entities left by trafilatura ===
+            extracted = re.sub(r'&\s*&\s*&\s*&\s*&\s*&', '', extracted)
+            extracted = re.sub(r'&\s*&', '', extracted)
+            extracted = re.sub(r'&amp;|\bamp\b|&quot;', '', extracted)
             
             # Parse with BeautifulSoup for additional cleaning
             soup = BeautifulSoup(extracted, 'html.parser')
@@ -36,7 +48,13 @@ class HTMLCleaner:
                     if tag.get(attr):
                         del tag[attr]
             
-            return str(soup)
+            cleaned_body = str(soup)
+            
+            # Re-inject the pristine metadata line at the bottom so pdf_merger can read the source URL
+            if meta_line:
+                cleaned_body += f"\n{meta_line}"
+                
+            return cleaned_body
             
         except Exception as e:
             logger.error(f"Error cleaning HTML from {url}: {e}")
@@ -75,8 +93,6 @@ def main():
     import glob
     
     cleaner = HTMLCleaner()
-    
-    # Process all cached HTML files
     html_files = glob.glob(os.path.join(HTML_CACHE_DIR, '**', '*.html'), recursive=True)
     logger.info(f"Cleaning {len(html_files)} HTML files...")
     
