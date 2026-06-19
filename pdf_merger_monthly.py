@@ -4,6 +4,7 @@ Group articles by publication month and merge into monthly PDFs per category chr
 import logging
 import os
 import csv
+import re
 import json
 import hashlib
 from datetime import datetime
@@ -36,7 +37,7 @@ class PDFMergerMonthly:
             doc = SimpleDocTemplate(
                 cover_path,
                 pagesize=A4,
-                rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72
+                rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54
             )
             
             styles = getSampleStyleSheet()
@@ -44,28 +45,24 @@ class PDFMergerMonthly:
                 'CoverTitle',
                 parent=styles['Normal'],
                 fontName='Helvetica',
-                fontSize=18,
-                textColor='#333333',
-                spaceAfter=30,
+                fontSize=16,
+                textColor='#222222',
+                spaceAfter=20,
                 alignment=TA_CENTER
             )
             
             story = []
-            story.append(Spacer(1, 2*inch))
+            story.append(Spacer(1, 1.5*inch))
             story.append(Paragraph("OpIndia Gujarati News Archive", custom_style))
-            story.append(Spacer(1, 0.5*inch))
+            story.append(Spacer(1, 0.25*inch))
             story.append(Paragraph(f"Category: {category_name_english}", custom_style))
             story.append(Paragraph(f"Month: {month_str}", custom_style))
-            story.append(Spacer(1, 0.5*inch))
+            story.append(Spacer(1, 0.25*inch))
             story.append(Paragraph(f"Total Articles: {article_count}", custom_style))
-            story.append(Spacer(1, 1*inch))
+            story.append(Spacer(1, 0.5*inch))
             story.append(Paragraph(
                 f"Archived on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                ParagraphStyle('Footer1', parent=styles['Normal'], fontSize=10)
-            ))
-            story.append(Paragraph(
-                "For personal research and archival purposes only.",
-                ParagraphStyle('Footer2', parent=styles['Normal'], fontSize=9, textColor='#666666')
+                ParagraphStyle('Footer1', parent=styles['Normal'], fontSize=9)
             ))
             
             doc.build(story)
@@ -75,7 +72,7 @@ class PDFMergerMonthly:
             return None
     
     def merge_pdfs_for_month(self, pdf_paths, output_path, category_key, month_str, article_count):
-        """Merge multiple PDFs into one safely"""
+        """Merge multiple PDFs into one continuously with zero extra blank sheets"""
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             cover_path = self.create_cover_page(category_key, month_str, article_count)
@@ -86,6 +83,8 @@ class PDFMergerMonthly:
                 for page in cover_reader.pages:
                     pdf_writer.add_page(page)
             
+            # === SPACE OPTIMIZATION FIX ===
+            # Read and add pages sequentially without padding out odd-numbered page margins
             for pdf_path in pdf_paths:
                 if os.path.exists(pdf_path):
                     try:
@@ -99,7 +98,7 @@ class PDFMergerMonthly:
                 pdf_writer.write(f)
             
             file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            logger.info(f"✓ Merged Chronological PDF: {output_path} ({file_size_mb:.2f} MB)")
+            logger.info(f"✓ Merged Concise PDF: {output_path} ({file_size_mb:.2f} MB)")
             
             if cover_path and os.path.exists(cover_path):
                 try: os.remove(cover_path)
@@ -122,19 +121,15 @@ class PDFMergerMonthly:
             if not pdf_files:
                 return 0
 
-            # === FIXED SCHEMA RESOLUTION BLOCK ===
-            # Safely unwrap list objects from the progress state keys matching category tracking signatures
             discovery_order = []
             try:
                 if os.path.exists(PROGRESS_FILE):
                     with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
                         progress_data = json.load(f)
                     
-                    # Read the array data directly out of the primary JSON block layers
-                    # (Falls back to look up direct root variables or dictionary keys interchangeably)
-                    discovered_list = progress_data.get(category_key, [])
-                    if not discovered_list:
-                        discovered_list = progress_data.get('discovered_urls', {}).get(category_key, [])
+                    discovered_list = progress_data.get('discovered_urls', {}).get(category_key, [])
+                    if not discovered_list and category_key in progress_data:
+                        discovered_list = progress_data[category_key]
                     if not discovered_list and 'politics' in progress_data:
                         discovered_list = progress_data['politics']
                         
@@ -146,22 +141,17 @@ class PDFMergerMonthly:
                             url_str = item
                         
                         if url_str:
-                            # Replicate the core scraper engine's exact 8-character string hash creation assignment routine
                             url_hash = hashlib.md5(url_str.encode('utf-8')).hexdigest()[:8]
                             discovery_order.append(url_hash)
             except Exception as p_err:
-                logger.warning(f"Could not calculate index arrays from progress tracking state: {p_err}")
+                logger.warning(f"Could not calculate index arrays: {p_err}")
 
             dated_pdfs = []
             logger.info(f"🔍 Timeline Scanning: Sorting {category_key} via streaming feed indices...")
             
             for p_path in pdf_files:
                 base_name = p_path.stem
-                
-                # Check where this file stands in the site's stream order
                 sort_priority = discovery_order.index(base_name) if base_name in discovery_order else 999
-                
-                # Fetch local file parameters as safe system properties indicators
                 mtime_date = datetime.fromtimestamp(os.path.getmtime(p_path))
                 
                 dated_pdfs.append({
@@ -171,17 +161,13 @@ class PDFMergerMonthly:
                     'name': base_name
                 })
             
-            # === TRUE LIVE STREAM SORT: Order directly matching the website timeline layout list (Position 0 -> 19) ===
             dated_pdfs.sort(key=lambda x: x['priority'])
             
             logger.info(f"📋 Stream Grid Sequence Verification for {category_key}:")
             for idx, item in enumerate(dated_pdfs[:5], 1):
                 logger.info(f"   [{idx}] {item['name']}.pdf ➔ Web Position Sequence: {item['priority']}")
-            if len(dated_pdfs) > 5:
-                logger.info(f"   ... [{len(dated_pdfs) - 5} additional streaming feed documents sorted cleanly below] ...")
                 
             sorted_pdf_paths = [item['path'] for item in dated_pdfs]
-            # ======================================================================================================
             
             category_info = CATEGORIES.get(category_key, {})
             category_name_english = category_info.get('name_english', category_key)

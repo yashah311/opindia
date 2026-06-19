@@ -1,5 +1,5 @@
 """
-Clean HTML: extract article content and remove ads/tracking
+Clean HTML: extract article content and remove ads/tracking/navigation elements
 """
 import logging
 import os
@@ -13,44 +13,56 @@ class HTMLCleaner:
     @staticmethod
     def clean_html(html_content, url):
         """
-        Extract article content using Trafilatura
-        Returns cleaned HTML with article content only
+        Extract core article text and forcefully decompose navigation grids
         """
         try:
-            # Preserve the OpIndia metadata line if it exists before trafilatura wipes it out
+            # પ્રગતિ ટ્રેકિંગ માટે ઓરિજિનલ મેટાડેટા લાઇન સાચવો
             meta_line = ""
             meta_match = re.search(r'(<p class="metadata_footer">Source:.*?</p>)', html_content)
             if meta_match:
                 meta_line = meta_match.group(1)
 
-            # Use trafilatura to extract main content
+            # ટ્રાફિલેતુરાનો ઉપયોગ કરીને મુખ્ય ટેક્સ્ટ એક્સટ્રેક્ટ કરો
             extracted = extract(html_content, output_format='html', include_comments=False)
             
             if not extracted:
                 logger.warning(f"Could not extract content from {url}")
                 return None
             
-            # === SURGICAL FIX: Strip away broken unescaped string entities left by trafilatura ===
+            # ટ્રાફિલેતુરા દ્વારા છોડવામાં આવેલા અનિચ્છનીય કેરેક્ટર્સ સાફ કરો
             extracted = re.sub(r'&\s*&\s*&\s*&\s*&\s*&', '', extracted)
             extracted = re.sub(r'&\s*&', '', extracted)
             extracted = re.sub(r'&amp;|\bamp\b|&quot;', '', extracted)
             
-            # Parse with BeautifulSoup for additional cleaning
             soup = BeautifulSoup(extracted, 'html.parser')
             
-            # Remove unwanted tags
+            # === સર્જિકલ ક્લીનઅપ: વેબસાઇટના મેનૂ, બ્રેડક્રમ્બ્સ અને સોશિયલ ટેગ્સ સંપૂર્ણ દૂર કરો ===
+            # આનાથી 'એક્સપ્લેઇનર', 'દેશ', 'રાજકારણ' અને હોમપેજની લિંક્સ કાયમ માટે હટી જશે
+            for bad_tag in ['img', 'figure', 'svg', 'header', 'footer', 'button', 'iframe', 'nav']:
+                for elem in soup.find_all(bad_tag):
+                    elem.decompose()
+            
+            # ટેક્સ્ટ લિંક્સ અને કેટેગરી પિલ્સને ટાર્ગેટ કરો
+            for link in soup.find_all('a'):
+                link_text = link.get_text(strip=True)
+                # જો લિંકમાં હોમપેજ કે કેટેગરીના શબ્દો હોય તો તેને દૂર કરો
+                if any(word in link_text for word in ['હોમપેજ', 'દેશ', 'રાજકારણ', 'એક્સપ્લેઇનર', 'ધર્મ', 'સંસ્કૃતિ', 'વિશેષ', 'સંપાદકની પસંદ']):
+                    link.decompose()
+            
+            # તમામ અનિચ્છનીય સ્ક્રિપ્ટો અને ક્લાસ ડીકમ્પોઝ કરો
+            for bad_pattern in ['logo', 'brand', 'header', 'nav', 'menu', 'breadcrumb', 'pills', 'tags', 'share', 'social', 'button']:
+                for element in soup.find_all(class_=re.compile(bad_pattern, re.I)):
+                    element.decompose()
+                for element in soup.find_all(id_=re.compile(bad_pattern, re.I)):
+                    element.decompose()
+            
+            # મૂળભૂત સફાઈ
             for tag in soup.find_all(['script', 'style', 'meta', 'link', 'noscript']):
                 tag.decompose()
             
-            # Remove inline scripts and event handlers
-            for tag in soup.find_all(True):
-                for attr in ['onclick', 'onerror', 'onload', 'onmouseover']:
-                    if tag.get(attr):
-                        del tag[attr]
-            
             cleaned_body = str(soup)
             
-            # Re-inject the pristine metadata line at the bottom so pdf_merger can read the source URL
+            # મેટાડેટા ફૂટર લાઇનને છેલ્લે ફરીથી ઉમેરો
             if meta_line:
                 cleaned_body += f"\n{meta_line}"
                 
@@ -82,27 +94,3 @@ class HTMLCleaner:
         except Exception as e:
             logger.error(f"Error saving cleaned HTML: {e}")
             return False
-
-def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    from config import HTML_CACHE_DIR
-    import glob
-    
-    cleaner = HTMLCleaner()
-    html_files = glob.glob(os.path.join(HTML_CACHE_DIR, '**', '*.html'), recursive=True)
-    logger.info(f"Cleaning {len(html_files)} HTML files...")
-    
-    for i, html_file in enumerate(html_files, 1):
-        logger.info(f"[{i}/{len(html_files)}] Processing {html_file}")
-        html_content = cleaner.read_cached_html(html_file)
-        if html_content:
-            cleaned = cleaner.clean_html(html_content, html_file)
-            if cleaned:
-                cleaner.save_cleaned_html(cleaned, html_file)
-
-if __name__ == '__main__':
-    main()
