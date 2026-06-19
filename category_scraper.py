@@ -1,5 +1,5 @@
 """
-Discover categories and extract all article URLs without filtering cross-posts
+Discover categories and extract all article URLs directly from the primary chronological grid feed
 """
 import json
 import time
@@ -35,7 +35,7 @@ class CategoryScraper:
             json.dump(progress, f, ensure_ascii=False, indent=2)
     
     def scrape_category(self, category_key, category_info, max_pages=None, is_demo_mode=False):
-        """Scrape all articles listed on the category feed page directly"""
+        """Scrape literal chronological stream articles from the primary layout grid column, ignoring featured carousels"""
         logger.info(f"Starting URL discovery for {category_key} ({category_info['name_english']})...")
         
         category_url = urljoin(BASE_URL, category_info['url'])
@@ -45,6 +45,7 @@ class CategoryScraper:
         
         while True:
             try:
+                # Build pagination URL
                 if page == 1:
                     url = category_url
                 else:
@@ -64,9 +65,22 @@ class CategoryScraper:
                     continue
                 
                 soup = BeautifulSoup(response.content, 'lxml')
-                article_links = soup.find_all('h3')
+                
+                # === SURGICAL SELECTOR: TARGET ONLY THE PRIMARY CHRONOLOGICAL CHANNELS ===
+                # Step 1: Decompose entire header layout dropdown containers completely
+                for header_menu in soup.find_all(class_=['td-header-menu-wrap', 'td-header-sp-container', 'td-mobile-nav']):
+                    header_menu.decompose()
+                
+                # Step 2: Target the unique primary vertical layout element hosting the page content feed grid
+                # This systematically ignores upper sliding hero widgets, trending carousels, and sidebars.
+                main_grid = soup.find('div', class_='td-main-content-wrap')
+                
+                # Dynamic structural recovery fallback boundary check
+                search_scope = main_grid if main_grid else soup
+                
+                article_links = search_scope.find_all('h3')
                 if not article_links:
-                    logger.info(f"  No more articles found. Stopping at page {page}")
+                    logger.info(f"  No more grid articles found. Stopping at page {page}")
                     break
                 
                 page_articles = 0
@@ -78,8 +92,10 @@ class CategoryScraper:
                     initial_url = a_tag.get('href')
                     article_title = a_tag.get_text(strip=True)
                     
-                    # === PRODUCTION ROUTINE: TRUST THE PAGE STREAM FEED COMPLETELY ===
-                    # If it's listed on the politics page, it gets classified as politics
+                    # Prevent link duplicates within page collection operations
+                    if any(item['url'] == initial_url for item in articles):
+                        continue
+                        
                     articles.append({
                         'url': initial_url,
                         'title': article_title,
@@ -87,8 +103,12 @@ class CategoryScraper:
                         'scraped_date': datetime.now().isoformat()
                     })
                     page_articles += 1
+                    
+                    # Cap page collections to literal grid length if container structure balloons
+                    if page_articles >= 10:
+                        break
                 
-                logger.info(f"  Page {page}: Found {page_articles} stream articles")
+                logger.info(f"  Page {page}: Found exactly {page_articles} real stream feed articles")
                 consecutive_errors = 0
                 
                 time.sleep(RATE_LIMIT_DELAY)
@@ -107,7 +127,7 @@ class CategoryScraper:
                 time.sleep(RATE_LIMIT_DELAY * 2)
                 page += 1
         
-        logger.info(f"✓ {category_key}: Found {len(articles)} articles total")
+        logger.info(f"✓ {category_key}: Found {len(articles)} total stream elements")
         return articles
     
     def scrape_all_categories(self, specific_category=None, max_pages=None):
@@ -139,7 +159,11 @@ class CategoryScraper:
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     scraper = CategoryScraper()
-    scraper.scrape_all_categories()
+    articles = scraper.scrape_all_categories()
     
+    print(f"\n✓ Total articles discovered: {sum(len(v) for v in articles.values())}")
+    for cat, arts in articles.items():
+        print(f"  {cat}: {len(arts)} articles")
+
 if __name__ == '__main__':
     main()
