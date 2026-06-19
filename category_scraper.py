@@ -67,15 +67,10 @@ class CategoryScraper:
                 soup = BeautifulSoup(response.content, 'lxml')
                 
                 # === SURGICAL SELECTOR: TARGET ONLY THE PRIMARY CHRONOLOGICAL CHANNELS ===
-                # Step 1: Decompose entire header layout dropdown containers completely
                 for header_menu in soup.find_all(class_=['td-header-menu-wrap', 'td-header-sp-container', 'td-mobile-nav']):
                     header_menu.decompose()
                 
-                # Step 2: Target the unique primary vertical layout element hosting the page content feed grid
-                # This systematically ignores upper sliding hero widgets, trending carousels, and sidebars.
                 main_grid = soup.find('div', class_='td-main-content-wrap')
-                
-                # Dynamic structural recovery fallback boundary check
                 search_scope = main_grid if main_grid else soup
                 
                 article_links = search_scope.find_all('h3')
@@ -92,7 +87,6 @@ class CategoryScraper:
                     initial_url = a_tag.get('href')
                     article_title = a_tag.get_text(strip=True)
                     
-                    # Prevent link duplicates within page collection operations
                     if any(item['url'] == initial_url for item in articles):
                         continue
                         
@@ -104,7 +98,6 @@ class CategoryScraper:
                     })
                     page_articles += 1
                     
-                    # Cap page collections to literal grid length if container structure balloons
                     if page_articles >= 10:
                         break
                 
@@ -129,10 +122,14 @@ class CategoryScraper:
         
         logger.info(f"✓ {category_key}: Found {len(articles)} total stream elements")
         return articles
-    
     def scrape_all_categories(self, specific_category=None, max_pages=None):
         """Scrape all categories or a specific one"""
         progress = self.load_progress()
+        
+        # Ensure discovered_urls namespace section is initialized cleanly inside state cache
+        if 'discovered_urls' not in progress:
+            progress['discovered_urls'] = {}
+            
         categories_to_scrape = [specific_category] if specific_category else CATEGORIES.keys()
         
         for category_key in categories_to_scrape:
@@ -148,6 +145,9 @@ class CategoryScraper:
             articles = self.scrape_category(category_key, category_info, max_pages, is_demo_mode=bool(specific_category))
             
             self.articles[category_key] = articles
+            
+            # === FIXED: Explicitly write the chronological list of articles into progress JSON ===
+            progress['discovered_urls'][category_key] = articles
             progress[f'{category_key}_completed'] = True
             progress[f'{category_key}_count'] = len(articles)
             progress['last_updated'] = datetime.now().isoformat()

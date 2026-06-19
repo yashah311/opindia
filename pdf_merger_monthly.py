@@ -4,9 +4,8 @@ Group articles by publication month and merge into monthly PDFs per category chr
 import logging
 import os
 import csv
-import re
 import json
-import ast
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from PyPDF2 import PdfWriter, PdfReader
@@ -110,54 +109,10 @@ class PDFMergerMonthly:
         except Exception as e:
             logger.error(f"Error merging PDFs: {e}")
             return None
-
-    def extract_published_date_from_html(self, html_path):
-        """Extract historical publishing dates from HTML body text tokens via regex"""
-        try:
-            with open(html_path, 'r', encoding='utf-8') as f:
-                raw_html = f.read()
-            
-            text = re.sub(r'<script.*?</script>', '', raw_html, flags=re.DOTALL)
-            text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            clean_text = ' '.join(text.split())
-            
-            date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})\s*[\s\u2502\u007c:-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', clean_text)
-            if date_match:
-                date_str = date_match.group(1).strip()
-                time_str = date_match.group(2).strip().upper()
-                return datetime.strptime(f"{date_str} {time_str}", "%B %d, %Y %I:%M %p")
-                
-            fallback_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', clean_text)
-            if fallback_match:
-                return datetime.strptime(fallback_match.group(1).strip(), "%B %d, %Y")
-                
-        except Exception:
-            pass
-        return None
-    def parse_metadata_from_html_footer(self, html_path):
-        """Extracts the source URL from the preserved metadata block"""
-        try:
-            with open(html_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # Extract content from our custom metadata line
-            if "Source: " in content:
-                start_idx = content.find("Source: ") + len("Source: ")
-                end_idx = content.find("</p>", start_idx)
-                meta_str = content[start_idx:end_idx].strip()
-                
-                meta_dict = ast.literal_eval(meta_str)
-                return meta_dict.get('url', '').lower().strip().rstrip('/')
-        except Exception:
-            pass
-        return ""
-
     def merge_by_month(self, category_key):
         """Processes and merges every file found in the category cache folder chronologically"""
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            html_dir = os.path.join(HTML_CACHE_DIR, category_key.lower())
             pdf_dir = os.path.join(base_dir, 'cache', 'individual_pdfs', category_key.lower())
             
             if not os.path.exists(pdf_dir):
@@ -167,68 +122,66 @@ class PDFMergerMonthly:
             if not pdf_files:
                 return 0
 
-            # Load the original ordered URL list directly from progress.json
-            ordered_urls = []
+            # === FIXED SCHEMA RESOLUTION BLOCK ===
+            # Safely unwrap list objects from the progress state keys matching category tracking signatures
+            discovery_order = []
             try:
-                with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
-                    progress_data = json.load(f)
-                
-                discovered_list = progress_data.get('discovered_urls', {}).get(category_key, [])
-                if not discovered_list and category_key == 'politics' and 'politics' in progress_data:
-                    discovered_list = progress_data['politics']
-                
-                for item in discovered_list:
-                    if isinstance(item, dict) and 'url' in item:
-                        ordered_urls.append(item['url'].lower().strip().rstrip('/'))
-                    elif isinstance(item, str):
-                        ordered_urls.append(item.lower().strip().rstrip('/'))
+                if os.path.exists(PROGRESS_FILE):
+                    with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                        progress_data = json.load(f)
+                    
+                    # Read the array data directly out of the primary JSON block layers
+                    # (Falls back to look up direct root variables or dictionary keys interchangeably)
+                    discovered_list = progress_data.get(category_key, [])
+                    if not discovered_list:
+                        discovered_list = progress_data.get('discovered_urls', {}).get(category_key, [])
+                    if not discovered_list and 'politics' in progress_data:
+                        discovered_list = progress_data['politics']
+                        
+                    for item in discovered_list:
+                        url_str = ""
+                        if isinstance(item, dict):
+                            url_str = item.get('url', '')
+                        elif isinstance(item, str):
+                            url_str = item
+                        
+                        if url_str:
+                            # Replicate the core scraper engine's exact 8-character string hash creation assignment routine
+                            url_hash = hashlib.md5(url_str.encode('utf-8')).hexdigest()[:8]
+                            discovery_order.append(url_hash)
             except Exception as p_err:
-                logger.warning(f"Could not load progress data: {p_err}")
+                logger.warning(f"Could not calculate index arrays from progress tracking state: {p_err}")
 
             dated_pdfs = []
-            html_files = list(Path(html_dir).glob('*.html'))
+            logger.info(f"🔍 Timeline Scanning: Sorting {category_key} via streaming feed indices...")
             
             for p_path in pdf_files:
                 base_name = p_path.stem
-                matching_html = os.path.join(html_dir, f"{base_name}.html")
                 
-                actual_article_url = ""
-                pub_date = None
+                # Check where this file stands in the site's stream order
+                sort_priority = discovery_order.index(base_name) if base_name in discovery_order else 999
                 
-                if os.path.exists(matching_html):
-                    actual_article_url = self.parse_metadata_from_html_footer(matching_html)
-                    pub_date = self.extract_published_date_from_html(matching_html)
+                # Fetch local file parameters as safe system properties indicators
+                mtime_date = datetime.fromtimestamp(os.path.getmtime(p_path))
                 
-                # Check where this URL stands in the site's stream order
-                sort_priority = 999
-                if actual_article_url:
-                    for idx, stream_url in enumerate(ordered_urls):
-                        if actual_article_url == stream_url:
-                            sort_priority = idx
-                            break
-                
-                if not pub_date:
-                    pub_date = datetime.fromtimestamp(os.path.getmtime(p_path))
-                
-                if pub_date.year == 2026 and pub_date.month == 6:
-                    dated_pdfs.append({
-                        'date': pub_date,
-                        'priority': sort_priority,
-                        'path': str(p_path),
-                        'name': base_name
-                    })
+                dated_pdfs.append({
+                    'date': mtime_date,
+                    'priority': sort_priority,
+                    'path': str(p_path),
+                    'name': base_name
+                })
             
-            if not dated_pdfs:
-                return 0
-                
-            # Sort directly by live page position order!
+            # === TRUE LIVE STREAM SORT: Order directly matching the website timeline layout list (Position 0 -> 19) ===
             dated_pdfs.sort(key=lambda x: x['priority'])
             
-            logger.info(f"📋 Chronological Order Map for {category_key}:")
+            logger.info(f"📋 Stream Grid Sequence Verification for {category_key}:")
             for idx, item in enumerate(dated_pdfs[:5], 1):
-                logger.info(f"   [{idx}] {item['name']}.pdf ➔ Published: {item['date'].strftime('%Y-%m-%d %I:%M %p')} [Position: {item['priority']}]")
+                logger.info(f"   [{idx}] {item['name']}.pdf ➔ Web Position Sequence: {item['priority']}")
+            if len(dated_pdfs) > 5:
+                logger.info(f"   ... [{len(dated_pdfs) - 5} additional streaming feed documents sorted cleanly below] ...")
                 
             sorted_pdf_paths = [item['path'] for item in dated_pdfs]
+            # ======================================================================================================
             
             category_info = CATEGORIES.get(category_key, {})
             category_name_english = category_info.get('name_english', category_key)
