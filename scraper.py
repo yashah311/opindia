@@ -143,7 +143,9 @@ def run_demo():
     logger.info("\n[4/4] Generating sample monthly PDF...")
     from pdf_merger_monthly import PDFMergerMonthly
     merger = PDFMergerMonthly()
-    merger.merge_all_categories()
+    
+    # FIX: Changed from merge_all_categories() to isolate only politics for the demo
+    merger.merge_by_month('politics')
     
     sample_pdf = os.path.join(
         os.path.dirname(__file__),
