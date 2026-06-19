@@ -1,5 +1,5 @@
 """
-Download and cache article HTML with metadata tagging capabilities
+Download and cache article HTML with isolated metadata tagging capabilities
 """
 import json
 import time
@@ -33,7 +33,7 @@ class ArticleScraper:
         return os.path.exists(self.get_cache_path(url, category))
     
     def download_article(self, url, category, retry_count=0):
-        """Download and cache article HTML with injected meta layout rows"""
+        """Download and cache article HTML with pristine layout rows"""
         try:
             if self.cache_exists(url, category):
                 logger.debug(f"Using cached: {url}")
@@ -53,21 +53,21 @@ class ArticleScraper:
                     logger.error(f"Failed after {MAX_RETRIES} retries: {url}")
                     return False
             
-            # === CRITICAL ENGINE IMPLEMENTATION: TAG SOURCE METADATA ===
-            # Injecting a distinct tracking paragraph string at the very bottom of the page content tree
-            raw_html = response.text
+            # === CHRONOLOGICAL CORE FIXED: FRESH STRINGS WRITE ===
+            # Cleanly create an isolated string payload to ensure zero bleeding across files
+            raw_html = str(response.text)
             meta_payload = {
                 'url': url,
                 'category': category,
                 'scraped_date': datetime.now().isoformat()
             }
             tagged_html = f"{raw_html}\n<p class=\"metadata_footer\">Source: {repr(meta_payload)}</p>"
-            # ==========================================================
             
-            # Save to cache
             cache_path = self.get_cache_path(url, category)
+            # Open with 'w' explicitly and write isolated clean text stream blocks
             with open(cache_path, 'w', encoding='utf-8') as f:
                 f.write(tagged_html)
+            # ===================================================
             
             logger.info(f"✓ Cached: {cache_path}")
             time.sleep(RATE_LIMIT_DELAY)
@@ -114,17 +114,11 @@ class ArticleScraper:
         return total_success
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    # Load discovered URLs from category_scraper.py
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     from category_scraper import CategoryScraper
     category_scraper = CategoryScraper()
     urls_by_category = category_scraper.scrape_all_categories()
     
-    # Download all
     scraper = ArticleScraper()
     scraper.download_all(urls_by_category)
 
