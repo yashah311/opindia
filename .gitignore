@@ -1,0 +1,19 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Scraper local caches and outputs (DO NOT PUSH TO GITHUB)
+cache/
+logs/
+output/
+fonts/
+
+# IDE settings
+.vscode/
+.idea/
