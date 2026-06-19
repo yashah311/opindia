@@ -94,6 +94,51 @@ def run_demo():
     article_scraper = ArticleScraper()
     article_scraper.download_all(urls)
     
+    # === DRIVER LAYER ENGINE: PROCESS CACHED HTML INTO INDIVIDUAL PDFs ===
+    logger.info("\n[3.5/4] Generating individual article PDFs via Playwright...")
+    from config import HTML_CACHE_DIR
+    from pdf_generator import PDFGenerator
+    import glob
+    
+    # Resolve exact path directories cleanly
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    pol_html_dir = os.path.join(HTML_CACHE_DIR, 'politics')
+    pol_pdf_output_dir = os.path.join(base_dir, 'cache', 'individual_pdfs', 'politics')
+    os.makedirs(pol_pdf_output_dir, exist_ok=True)
+    
+    # Locate all underlying HTML files generated during the download phase
+    html_files = glob.glob(os.path.join(pol_html_dir, "*.html"))
+    logger.info(f"🚀 Found {len(html_files)} items to process in cache.")
+    
+    if not html_files:
+        logger.error(f"❌ Aborting generation. No offline source files found inside {pol_html_dir}")
+        return False
+        
+    generator = PDFGenerator()
+    politics_urls = urls.get('politics', [])
+    
+    # Map raw list variables safely if it comes wrapped inside metadata dictionaries
+    if isinstance(politics_urls, dict):
+        politics_urls = list(politics_urls.keys())
+        
+    # Process files sequentially using the module's native sync wrapper block
+    for idx, html_path in enumerate(html_files, 1):
+        filename = os.path.basename(html_path)
+        base_name = os.path.splitext(filename)[0]
+        output_pdf_path = os.path.join(pol_pdf_output_dir, f"{base_name}.pdf")
+        
+        # Match URL metadata reference if available; fallback to source root string
+        article_url = politics_urls[idx-1] if idx <= len(politics_urls) else "https://opindia.com"
+        
+        logger.info(f"⏳ Generating Document [{idx}/{len(html_files)}]: {base_name}")
+        try:
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            generator.convert_sync(html_content, output_pdf_path, article_url)
+        except Exception as f_err:
+            logger.warning(f"   ⚠️ Skipping target component generation failure: {f_err}")
+    # ====================================================================
+    
     # Merge into sample PDF
     logger.info("\n[4/4] Generating sample monthly PDF...")
     from pdf_merger_monthly import PDFMergerMonthly

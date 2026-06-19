@@ -15,7 +15,7 @@ class PDFGenerator:
         self.font_path = os.path.join(FONTS_DIR, 'NotoSansGujarati-Regular.ttf')
     
     def get_styled_html(self, article_html, article_url):
-        """Wrap article HTML with print-friendly styling"""
+        """Wrap article HTML with print-friendly styling and safe ad collapsing"""
         css = f"""
         <style>
             @font-face {{
@@ -33,14 +33,31 @@ class PDFGenerator:
                 font-size: 12pt;
             }}
             
+            /* === SAFELY FIX OVERLAPPING HEADERS WITHOUT TOUCHING LAYOUT === */
             h1, h2, h3, h4, h5, h6 {{
                 font-family: 'Gujarati', sans-serif;
-                margin: 15px 0 10px 0;
+                margin: 20px 0 10px 0 !important;
+                line-height: 1.5 !important;
+                height: auto !important;
+                display: block !important;
             }}
             
             p {{
                 margin: 10px 0;
                 text-align: justify;
+            }}
+            
+            /* === SURGICAL ADS CLEANUP: ONLY MATCH EXPLICIT AD NETWORK CLASSES === */
+            .adsbygoogle, 
+            .code-block, 
+            .ad-wrapper, 
+            div.google-ads, 
+            div.ad-container {{
+                display: none !important;
+                height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                visibility: hidden !important;
             }}
             
             a {{
@@ -90,19 +107,19 @@ class PDFGenerator:
         </body>
         </html>
         """
-    
+             
     async def html_to_pdf(self, html_content, output_pdf_path, article_url):
-        """Convert HTML to PDF using Playwright"""
+        """Convert HTML to PDF using Playwright with optimized load thresholds"""
         try:
             os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
-            
             styled_html = self.get_styled_html(html_content, article_url)
             
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
                 page = await browser.new_page()
                 
-                await page.set_content(styled_html, wait_until='networkidle')
+                # FIX: Swapped out 'networkidle' for fast, offline 'domcontentloaded' tracking
+                await page.set_content(styled_html, wait_until='domcontentloaded')
                 await page.pdf(
                     path=output_pdf_path,
                     format='A4',
