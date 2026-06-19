@@ -110,38 +110,37 @@ class PDFMergerMonthly:
             return None
 
     def extract_published_date_from_html(self, html_path):
-        """Surgically extracts real publishing date string even with stylized typographic dividers"""
+        """Extract historical publishing dates from HTML body text tokens"""
         try:
             with open(html_path, 'r', encoding='utf-8') as f:
                 raw_html = f.read()
             
-            # Clean elements out to eliminate clutter layers
             text = re.sub(r'<script.*?</script>', '', raw_html, flags=re.DOTALL)
             text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', ' ', text)
             clean_text = ' '.join(text.split())
             
-            # === CRITICAL RE-MAPPING: Capture both keyboard '|' and typographical '|' unicode variants ===
+            # Match date patterns like "June 7, 2026 | 4:24 PM" with typographic separators
             date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})\s*[\s\u2502\u007c:-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', clean_text)
-            
             if date_match:
                 date_str = date_match.group(1).strip()
                 time_str = date_match.group(2).strip().upper()
                 return datetime.strptime(f"{date_str} {time_str}", "%B %d, %Y %I:%M %p")
                 
-            # Secondary fallback search if time segment string expression drops
             fallback_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', clean_text)
             if fallback_match:
                 return datetime.strptime(fallback_match.group(1).strip(), "%B %d, %Y")
                 
-        except Exception as e:
-            logger.debug(f"Regex processing exception: {e}")
+        except Exception:
+            pass
         return None
 
     def merge_by_month(self, category_key):
-        """Filters, sorts, and clusters files chronologically based on real internal data values"""
+        """Processes and merges every file found in the category cache folder chronologically"""
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Map paths based on the category key parameter
             html_dir = os.path.join(HTML_CACHE_DIR, category_key.lower())
             pdf_dir = os.path.join(base_dir, 'cache', 'individual_pdfs', category_key.lower())
             
@@ -163,11 +162,10 @@ class PDFMergerMonthly:
                 if os.path.exists(matching_html):
                     pub_date = self.extract_published_date_from_html(matching_html)
                 
-                # Fallback to filesystem modified timestamp if HTML parsing skips
                 if not pub_date:
                     pub_date = datetime.fromtimestamp(os.path.getmtime(p_path))
                 
-                # Target Layer Constraint: Isolate June 2026 articles exclusively
+                # Capture all articles belonging to June 2026
                 if pub_date.year == 2026 and pub_date.month == 6:
                     dated_pdfs.append({
                         'date': pub_date,
@@ -176,13 +174,11 @@ class PDFMergerMonthly:
                     })
             
             if not dated_pdfs:
-                logger.info(f"No valid June 2026 documents found for {category_key}")
                 return 0
                 
-            # === CHRONOLOGICAL ORDERING FIX: Sort entries Descending (June 19 -> June 1) ===
+            # Chronological descending sort (Newest first)
             dated_pdfs.sort(key=lambda x: x['date'], reverse=True)
             
-            # Print sorting trace log to console window for visual confirmation
             logger.info(f"📋 Chronological Order Map for {category_key}:")
             for idx, item in enumerate(dated_pdfs[:5], 1):
                 logger.info(f"   [{idx}] {item['name']}.pdf ➔ {item['date'].strftime('%Y-%m-%d %I:%M %p')}")
@@ -190,7 +186,6 @@ class PDFMergerMonthly:
                 logger.info(f"   ... [{len(dated_pdfs) - 5} additional documents sorted below] ...")
                 
             sorted_pdf_paths = [item['path'] for item in dated_pdfs]
-            # ===============================================================================
             
             category_info = CATEGORIES.get(category_key, {})
             category_name_english = category_info.get('name_english', category_key)
@@ -220,29 +215,29 @@ class PDFMergerMonthly:
         except Exception as e:
             logger.error(f"Error sorting/merging {category_key}: {e}")
             return 0
-            
+
     def merge_all_categories(self):
         """Orchestrate merge process across all active categories"""
         logger.info("Starting monthly PDF merge...")
         total_merged = 0
-
+        
         for cat_key in CATEGORIES.keys():
             total_merged += self.merge_by_month(cat_key)
-
+            
         logger.info(f"✓ Total articles merged: {total_merged}")
-
+        
         if self.metadata:
             os.makedirs(METADATA_DIR, exist_ok=True)
             metadata_file = os.path.join(METADATA_DIR, 'archive_metadata.csv')
-
             try:
                 with open(metadata_file, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.DictWriter(f, fieldnames=self.metadata.keys())
+                    fieldnames = ['category', 'month', 'article_count', 'file_size_mb', 'timestamp']
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(self.metadata)
                 logger.info(f"✓ Metadata saved: {metadata_file}")
             except Exception as e:
-                logger.error(f"Failed to save metadata metrics log file: {e}")
+                logger.error(f"Failed to save metadata log file: {e}")
 
 
 def main():

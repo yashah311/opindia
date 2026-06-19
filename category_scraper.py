@@ -1,5 +1,5 @@
 """
-Discover categories and extract all article URLs
+Discover categories and extract all article URLs without filtering cross-posts
 """
 import json
 import time
@@ -34,8 +34,8 @@ class CategoryScraper:
         with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
             json.dump(progress, f, ensure_ascii=False, indent=2)
     
-    def scrape_category(self, category_key, category_info, max_pages=None):
-        """Scrape all articles from a category"""
+    def scrape_category(self, category_key, category_info, max_pages=None, is_demo_mode=False):
+        """Scrape all articles listed on the category feed page directly"""
         logger.info(f"Starting URL discovery for {category_key} ({category_info['name_english']})...")
         
         category_url = urljoin(BASE_URL, category_info['url'])
@@ -45,7 +45,6 @@ class CategoryScraper:
         
         while True:
             try:
-                # Build pagination URL
                 if page == 1:
                     url = category_url
                 else:
@@ -65,8 +64,6 @@ class CategoryScraper:
                     continue
                 
                 soup = BeautifulSoup(response.content, 'lxml')
-                
-                # Extract articles from page
                 article_links = soup.find_all('h3')
                 if not article_links:
                     logger.info(f"  No more articles found. Stopping at page {page}")
@@ -78,18 +75,20 @@ class CategoryScraper:
                     if not a_tag or not a_tag.get('href'):
                         continue
                     
-                    article_url = a_tag.get('href')
+                    initial_url = a_tag.get('href')
                     article_title = a_tag.get_text(strip=True)
                     
+                    # === PRODUCTION ROUTINE: TRUST THE PAGE STREAM FEED COMPLETELY ===
+                    # If it's listed on the politics page, it gets classified as politics
                     articles.append({
-                        'url': article_url,
+                        'url': initial_url,
                         'title': article_title,
                         'category': category_key,
                         'scraped_date': datetime.now().isoformat()
                     })
                     page_articles += 1
                 
-                logger.info(f"  Page {page}: Found {page_articles} articles")
+                logger.info(f"  Page {page}: Found {page_articles} stream articles")
                 consecutive_errors = 0
                 
                 time.sleep(RATE_LIMIT_DELAY)
@@ -108,13 +107,12 @@ class CategoryScraper:
                 time.sleep(RATE_LIMIT_DELAY * 2)
                 page += 1
         
-        logger.info(f"✓ {category_key}: Found {len(articles)} articles")
+        logger.info(f"✓ {category_key}: Found {len(articles)} articles total")
         return articles
     
     def scrape_all_categories(self, specific_category=None, max_pages=None):
         """Scrape all categories or a specific one"""
         progress = self.load_progress()
-        
         categories_to_scrape = [specific_category] if specific_category else CATEGORIES.keys()
         
         for category_key in categories_to_scrape:
@@ -122,13 +120,12 @@ class CategoryScraper:
                 logger.error(f"Unknown category: {category_key}")
                 continue
             
-            # Skip if already completed
-            if progress.get(f'{category_key}_completed'):
+            if progress.get(f'{category_key}_completed') and not specific_category:
                 logger.info(f"Skipping {category_key} (already completed)")
                 continue
             
             category_info = CATEGORIES[category_key]
-            articles = self.scrape_category(category_key, category_info, max_pages)
+            articles = self.scrape_category(category_key, category_info, max_pages, is_demo_mode=bool(specific_category))
             
             self.articles[category_key] = articles
             progress[f'{category_key}_completed'] = True
@@ -140,17 +137,9 @@ class CategoryScraper:
         return self.articles
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     scraper = CategoryScraper()
-    articles = scraper.scrape_all_categories()
+    scraper.scrape_all_categories()
     
-    print(f"\n✓ Total articles discovered: {sum(len(v) for v in articles.values())}")
-    for cat, arts in articles.items():
-        print(f"  {cat}: {len(arts)} articles")
-
 if __name__ == '__main__':
     main()
