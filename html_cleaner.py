@@ -1,5 +1,5 @@
 """
-Clean HTML: extract article content and remove ads/tracking/navigation elements
+Clean HTML: extract ONLY the pure text of the article and fully decouple from HTML UI
 """
 import logging
 import os
@@ -13,7 +13,7 @@ class HTMLCleaner:
     @staticmethod
     def clean_html(html_content, url):
         """
-        Extract core article text and forcefully decompose navigation grids
+        Decouple article text from all HTML structures and return pure text paragraphs
         """
         try:
             # પ્રગતિ ટ્રેકિંગ માટે ઓરિજિનલ મેટાડેટા લાઇન સાચવો
@@ -22,51 +22,48 @@ class HTMLCleaner:
             if meta_match:
                 meta_line = meta_match.group(1)
 
-            # ટ્રાફિલેતુરાનો ઉપયોગ કરીને મુખ્ય ટેક્સ્ટ એક્સટ્રેક્ટ કરો
+            # ટ્રાફિલેતુરાનો ઉપયોગ કરીને મુખ્ય કન્ટેન્ટ એક્સટ્રેક્ટ કરો
             extracted = extract(html_content, output_format='html', include_comments=False)
             
             if not extracted:
                 logger.warning(f"Could not extract content from {url}")
                 return None
             
-            # ટ્રાફિલેતુરા દ્વારા છોડવામાં આવેલા અનિચ્છનીય કેરેક્ટર્સ સાફ કરો
+            # ટ્રાફિલેતુરાના અનિચ્છનીય એન્ટિટીઝ સાફ કરો
             extracted = re.sub(r'&\s*&\s*&\s*&\s*&\s*&', '', extracted)
             extracted = re.sub(r'&\s*&', '', extracted)
             extracted = re.sub(r'&amp;|\bamp\b|&quot;', '', extracted)
             
             soup = BeautifulSoup(extracted, 'html.parser')
             
-            # === સર્જિકલ ક્લીનઅપ: વેબસાઇટના મેનૂ, બ્રેડક્રમ્બ્સ અને સોશિયલ ટેગ્સ સંપૂર્ણ દૂર કરો ===
-            # આનાથી 'એક્સપ્લેઇનર', 'દેશ', 'રાજકારણ' અને હોમપેજની લિંક્સ કાયમ માટે હટી જશે
-            for bad_tag in ['img', 'figure', 'svg', 'header', 'footer', 'button', 'iframe', 'nav']:
-                for elem in soup.find_all(bad_tag):
-                    elem.decompose()
-            
-            # ટેક્સ્ટ લિંક્સ અને કેટેગરી પિલ્સને ટાર્ગેટ કરો
-            for link in soup.find_all('a'):
-                link_text = link.get_text(strip=True)
-                # જો લિંકમાં હોમપેજ કે કેટેગરીના શબ્દો હોય તો તેને દૂર કરો
-                if any(word in link_text for word in ['હોમપેજ', 'દેશ', 'રાજકારણ', 'એક્સપ્લેઇનર', 'ધર્મ', 'સંસ્કૃતિ', 'વિશેષ', 'સંપાદકની પસંદ']):
-                    link.decompose()
-            
-            # તમામ અનિચ્છનીય સ્ક્રિપ્ટો અને ક્લાસ ડીકમ્પોઝ કરો
-            for bad_pattern in ['logo', 'brand', 'header', 'nav', 'menu', 'breadcrumb', 'pills', 'tags', 'share', 'social', 'button']:
-                for element in soup.find_all(class_=re.compile(bad_pattern, re.I)):
-                    element.decompose()
-                for element in soup.find_all(id_=re.compile(bad_pattern, re.I)):
-                    element.decompose()
-            
-            # મૂળભૂત સફાઈ
-            for tag in soup.find_all(['script', 'style', 'meta', 'link', 'noscript']):
-                tag.decompose()
-            
-            cleaned_body = str(soup)
-            
-            # મેટાડેટા ફૂટર લાઇનને છેલ્લે ફરીથી ઉમેરો
-            if meta_line:
-                cleaned_body += f"\n{meta_line}"
+            # === મોટો ફેરફાર: આખી વેબસાઇટનું HTML માળખું તોડી નાખો અને માત્ર ટેક્સ્ટ લો ===
+            # હેડર મેનૂ અને જાહેરાતના ટેક્સ્ટ ફિલ્ટર આઉટ કરો
+            lines = []
+            for paragraph in soup.find_all(['p', 'h1', 'h2', 'h3', 'span', 'div']):
+                text_line = paragraph.get_text(strip=True)
                 
-            return cleaned_body
+                # ફિલ્ટર: નકામી વેબ લિંક્સ, બેનર્સ અને એડવર્ટાઇઝમેન્ટ લાઇન સ્કીપ કરો
+                if not text_line:
+                    continue
+                if any(word in text_line for word in ['હોમપેજ', 'દેશ', 'રાજકારણ', 'એક્સપ્લેઇનર', 'ધર્મ', 'સંસ્કૃતિ', 'વિશેષ', 'સંપાદકની પસંદ', 'મંતવ્ય', 'ગુજરાત', 'દુનિયા', 'Advertisement', 'जाहरात', 'જાહેરાત', 'Photo:']):
+                    continue
+                
+                # ક્લીન થયેલી લાઇન જો પહેલેથી એડ ન થઈ હોય તો જ લો
+                if text_line not in lines:
+                    # જો તે હેડિંગ હોય તો તેને HTML ટૅગ આપો, બાકી નોર્મલ પેરેગ્રાફ સેટ કરો
+                    if paragraph.name in ['h1', 'h2', 'h3']:
+                        lines.append(f"<h2>{text_line}</h2>")
+                    else:
+                        lines.append(f"<p>{text_line}</p>")
+            
+            # શુદ્ધ કન્ટેન્ટને ભેગું કરો
+            pure_text_body = "\n".join(lines)
+            
+            # મેટાડેટા ફૂટર લાઇન છેલ્લે જોડી દો
+            if meta_line:
+                pure_text_body += f"\n{meta_line}"
+                
+            return pure_text_body
             
         except Exception as e:
             logger.error(f"Error cleaning HTML from {url}: {e}")
@@ -94,3 +91,22 @@ class HTMLCleaner:
         except Exception as e:
             logger.error(f"Error saving cleaned HTML: {e}")
             return False
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    from config import HTML_CACHE_DIR
+    import glob
+    
+    cleaner = HTMLCleaner()
+    html_files = glob.glob(os.path.join(HTML_CACHE_DIR, '**', '*.html'), recursive=True)
+    logger.info(f"Cleaning {len(html_files)} HTML files...")
+    
+    for i, html_file in enumerate(html_files, 1):
+        html_content = cleaner.read_cached_html(html_file)
+        if html_content:
+            cleaned = cleaner.clean_html(html_content, html_file)
+            if cleaned:
+                cleaner.save_cleaned_html(cleaned, html_file)
+
+if __name__ == '__main__':
+    main()

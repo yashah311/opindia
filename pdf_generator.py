@@ -1,5 +1,5 @@
 """
-Convert HTML articles to PDF with zero content loss, full A4 formatting, and hidden web UI
+Convert HTML articles to PDF with exact Date, Author, and Full-Canvas A4 Spacing
 """
 import logging
 import os
@@ -17,35 +17,64 @@ class PDFGenerator:
         self.font_path = os.path.join(FONTS_DIR, 'NotoSansGujarati-Regular.ttf')
     
     def get_styled_html(self, article_html, article_url):
-        """Inject clean full-width CSS styles while hiding specific web remnants to keep text safe"""
+        """Isolate core article body strings using precise text-only scraping boundaries"""
         
         soup = BeautifulSoup(article_html, 'html.parser')
         
-        # આર્ટિકલના ટાઇટલ (H1) ને શોધો અને સાચવો
+        # 1. Surgically extract the true Author Name and Date strings from OpIndia's meta containers
+        author_name = "ઑપઇન્ડિયા સ્ટાફ"
+        pub_date = "June 2026"
+        
+        # Look for the explicit author name container classes used by the website template
+        author_elem = soup.find(class_=re.compile(r'td-post-author-name|author', re.I))
+        if author_elem:
+            extracted_author = author_elem.get_text(strip=True)
+            if extracted_author and len(extracted_author) < 50:
+                author_name = extracted_author
+                
+        # Look for the explicit publication date container element metadata rows
+        date_elem = soup.find('time', class_=re.compile(r'entry-date|updated|date', re.I))
+        if not date_elem:
+            date_elem = soup.find(class_=re.compile(r'td-post-date|entry-date', re.I))
+            
+        if date_elem:
+            extracted_date = date_elem.get_text(strip=True)
+            if extracted_date:
+                pub_date = extracted_date
+        
+        # 2. Extract the true Article Title text string from the H1 tag element
         article_title = "ઑપઇન્ડિયા આર્કાઇવ લેખ"
         h1_tag = soup.find('h1')
         if h1_tag:
             article_title = h1_tag.get_text(strip=True)
-            
-        clean_text = soup.get_text(' ')
-        
-        # મૂળભૂત ડિફોલ્ટ વેલ્યુ સેટ કરો
-        author_name = "ઑપઇન્ડિયા સ્ટાફ"
-        pub_date = "June 2026"
-        
-        # ગુજરાતી તારીખ અને અંગ્રેજી લેખકના નામની સચોટ પેટર્ન પકડો
-        meta_match = re.search(r'(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})\s*(?:\n|\s)*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', clean_text)
-        if meta_match:
-            pub_date = meta_match.group(1).strip()
-            author_name = meta_match.group(2).strip()
-        else:
-            secondary_match = re.search(r'([A-Za-z\s]+)\s*-\s*(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})', clean_text)
-            if secondary_match:
-                author_name = secondary_match.group(1).strip()
-                pub_date = secondary_match.group(2).strip()
 
-        # લખાણ સુરક્ષિત રાખવા માટે આખી બોડી ટ્રીને સ્ટ્રિંગમાં કન્વર્ટ કરો
-        pure_body_content = str(soup)
+        # 3. CRITICAL TEXT EXTRACTION FIX: Isolate ONLY the primary story content container wrapper
+        # This bypasses all header menus, breadcrumbs, orange pills, calendar icons, and black boxes
+        content_container = soup.find(class_=re.compile(r'td-post-content|entry-content|article-body', re.I))
+        
+        paragraphs_html = []
+        if content_container:
+            # Step through text paragraph tags inside the core content column grid container
+            for p_tag in content_container.find_all(['p', 'h2', 'h3', 'h4']):
+                p_text = p_tag.get_text(strip=True)
+                
+                # Drop blank lines and filter out boilerplate advertisement string phrases
+                if not p_text or any(word in p_text for word in ['- Advertisement -', 'જાહેરાત', 'जाहरात', 'Photo:']):
+                    continue
+                    
+                if p_tag.name in ['h2', 'h3', 'h4']:
+                    paragraphs_html.append(f"<h2>{p_text}</h2>")
+                else:
+                    paragraphs_html.append(f"<p>{p_text}</p>")
+        
+        # Fallback to general loop text parsing checks if the primary container isn't resolved
+        if not paragraphs_html:
+            for p_tag in soup.find_all('p'):
+                p_text = p_tag.get_text(strip=True)
+                if p_text and not any(word in p_text for word in ['- Advertisement -', 'જાહેરાત', 'Source:']):
+                    paragraphs_html.append(f"<p>{p_text}</p>")
+
+        clean_story_body = "\n".join(paragraphs_html)
             
         css = f"""
         <style>
@@ -66,9 +95,9 @@ class PDFGenerator:
             }}
             
             .article-header-block {{
-                margin-bottom: 25px;
-                border-bottom: 2px solid #222;
-                padding-bottom: 12px;
+                margin-bottom: 22px;
+                border-bottom: 2px solid #111;
+                padding-bottom: 10px;
                 width: 100%;
             }}
             
@@ -83,7 +112,7 @@ class PDFGenerator:
             
             .meta-row {{
                 font-size: 10.5pt;
-                color: #333;
+                color: #222;
                 margin: 4px 0;
                 text-align: left !important;
             }}
@@ -92,9 +121,9 @@ class PDFGenerator:
                 font-weight: bold;
             }}
             
-            h1, h2, h3, h4, h5, h6 {{
+            h2, h3, h4 {{
                 font-family: 'Gujarati', sans-serif;
-                margin: 20px 0 10px 0 !important;
+                margin: 18px 0 8px 0 !important;
                 line-height: 1.4 !important;
                 color: #000;
                 text-align: left !important;
@@ -104,31 +133,10 @@ class PDFGenerator:
             p {{
                 margin: 12px 0 !important;
                 padding: 0 !important;
-                text-align: left !important; /* ફૂલ-પેજ લેફ્ટ અલાઈન જેથી કટિંગ પ્રશ્નો ન થાય */
+                text-align: left !important; /* Left alignment to prevent text cuts at margins */
                 word-wrap: break-word !important;
                 width: 100% !important;
                 display: block !important;
-            }}
-            
-            /* === CSS ઇન્જેક્શન ફિક્સ: લખાણ ડિલીટ કર્યા વગર માત્ર વેબ બેનર્સને હાઇડ કરો === */
-            img, svg, video, figure, header, footer, hr,
-            .td-header-menu-wrap, .td-crumbs, .td-post-sharing, .td-category-pills,
-            [class*="sharing"], [class*="crumbs"], [class*="advertisement"] {{
-                display: none !important;
-                height: 0 !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-            }}
-            
-            .article-footer {{
-                margin-top: 35px;
-                border-top: 1px dashed #aaa;
-                padding-top: 10px;
-                font-size: 9pt;
-                color: #555;
-                width: 100%;
             }}
         </style>
         """
@@ -142,7 +150,7 @@ class PDFGenerator:
         """
         
         footer = f"""
-        <div class="article-footer">
+        <div style="margin-top: 30px; border-top: 1px dashed #aaa; padding-top: 8px; font-size: 9pt; color: #555; width: 100%;">
             <p>Archived: OpIndia Gujarati News Archive</p>
         </div>
         """
@@ -157,13 +165,13 @@ class PDFGenerator:
         </head>
         <body>
             {meta_html}
-            {pure_body_content}
+            {clean_story_body}
             {footer}
         </body>
         </html>
         """
     async def html_to_pdf(self, html_content, output_pdf_path, article_url):
-        """Convert HTML to PDF using Playwright with optimized full-canvas printable margins"""
+        """Convert HTML to PDF using Playwright with optimized A4 canvas margins"""
         try:
             os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
             styled_html = self.get_styled_html(html_content, article_url)
@@ -176,13 +184,12 @@ class PDFGenerator:
                 await page.pdf(
                     path=output_pdf_path,
                     format='A4',
-                    # આર્કાઇવ પ્રિન્ટિંગ માટે સ્ટાન્ડર્ડ માર્જિન સેટઅપ
                     margin={'top': '15mm', 'bottom': '15mm', 'left': '15mm', 'right': '15mm'},
                     print_background=True
                 )
                 
                 await browser.close()
-                logger.info(f"✓ Generated Full-Canvas Text PDF: {output_pdf_path}")
+                logger.info(f"✓ Generated True Plain Text PDF: {output_pdf_path}")
                 return True
                 
         except Exception as e:
