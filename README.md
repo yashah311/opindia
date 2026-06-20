@@ -25,7 +25,7 @@ A production-ready, fire-and-forget web scraper that automatically archives all 
 
 ```bash
 # 1. Navigate to project folder
-cd "c:\Users\yash.shah\OneDrive - SNV Aviation Pvt Ltd\Desktop\Desktop\project\opindia"
+cd "Desktop\project\opindia"
 
 # 2. Create virtual environment
 python -m venv venv
@@ -100,42 +100,94 @@ python scraper.py --all --max-pages 2
 python scraper.py --all --skip-download   # Skip HTML download, use cache
 python scraper.py --all --skip-pdf        # Skip PDF generation
 ```
+## Core Operational Commands
 
-## Output Structure
-
+### 1. Pre-Flight Demo Mode
+**Always run this first.** It performs URL discovery, cleans up structural formatting, and outputs a validation document for the **Gujarat** category to verify system fonts and page layouts.
+```bash
+python scraper.py --demo
 ```
-output/
-├── monthly_pdfs/
-│   ├── Politics/
-│   │   ├── OpIndia_Gujarati_Politics_2026-06.pdf
-│   │   ├── OpIndia_Gujarati_Politics_2026-05.pdf
-│   │   └── ...
-│   ├── World/
-│   │   ├── OpIndia_Gujarati_World_2026-06.pdf
-│   │   └── ...
-│   ├── Crime/
-│   ├── Reports/
-│   ├── Gujarat/
-│   ├── Explainer/
-│   ├── India/
-│   ├── FactCheck/
-│   ├── Media/
-│   ├── Religion/
-│   ├── Entertainment/
-│   ├── Sports/
-│   ├── Satire/
-│   └── Miscellaneous/
-└── metadata/
-    └── archive_metadata.csv
+* **Output Location**: `output/monthly_pdfs/Gujarat/OpIndia_Gujarati_Gujarat_2026-06.pdf`
 
-logs/
-└── archive_YYYYMMDD_HHMMSS.log
-
-cache/
-├── html_cache/        (Downloaded HTML files)
-├── individual_pdfs/   (Article PDFs before merging)
-└── progress.json      (Checkpoint data)
+### 2. Full Archive Bulk Pipeline
+Launches the background workers across all 14 configured database segments sequentially (takes ~4–6 hours first run).
+```bash
+python scraper.py --all
 ```
+
+### 3. Targeted Category & Page Extraction Controls
+Use the `--category` routing string paired with the `--max-pages` integer parameter to execute precise extraction tasks:
+
+```bash
+# Test a category layout with a 2-page pagination deep-check
+python scraper.py --category politics --max-pages 2
+
+# Limit data parsing down to a single page index window
+python scraper.py --category politics --max-pages 1
+python scraper.py --category crime --max-pages 1
+
+# Extract nested category items safely using case-insensitive dictionary routing keys
+python scraper.py --category religion --max-pages 1
+python scraper.py --category entertainment --max-pages 1
+python scraper.py --category sports --max-pages 1
+python scraper.py --category satire --max-pages 1
+```
+
+---
+
+## Output Quality Verification Checklist
+
+Open newly generated compilation files and check for the following properties:
+1. **Font Integrity**: Text reads organically in standard Gujarati characters (no blank boxes, squares, or overlapping lettering).
+2. **Heading Separation**: Elements like `<h1>` and `<h2>` use `break-inside: avoid;` print directives so titles never truncate at footer lines.
+3. **No Character Bloat**: Banners and escaped string tokens are neutralized; no unexpected repeating text strings (`& & & &`) display on section breaks.
+
+---
+
+## Workspace Directory Tree
+
+```text
+opindia/
+├── cache/
+│   ├── html_cache/         <- Structured offline text backups
+│   ├── individual_pdfs/    <- Intermediary single-article compiled documents
+│   └── progress.json       <- Tracking checkpoints and state map indices
+├── fonts/
+│   └── NotoSansGujarati-Regular.ttf <- Localized script validation asset
+├── logs/
+│   └── archive_YYYYMMDD_HHMMSS.log  <- Execution trace logs
+└── output/
+    ├── metadata/           <- Compilation runtime statistics CSV files
+    └── monthly_pdfs/       <- Categorized final products
+        ├── Crime/
+        ├── Gujarat/
+        ├── Politics/
+        └── Religion/       <- Nested sub-category URLs map cleanly here
+```
+
+---
+
+## Configuration Tuning
+
+To change engine performance, adjust property definitions inside **`config.py`**:
+
+```python
+RATE_LIMIT_DELAY = 2   # Request cooldown padding between HTTP actions (be polite!)
+MAX_RETRIES = 3        # Connection attempt limits before throwing errors
+REQUEST_TIMEOUT = 15   # Network socket wait threshold boundaries (seconds)
+```
+
+---
+
+## Real-Time Process Monitoring
+
+To track background operations across your Windows PowerShell environment, run the following live tracking tail string block:
+
+```powershell
+Get-Content -Path logs/archive_*.log -Wait -Tail 30
+```
+
+---
 
 ## Execution Timeline
 
