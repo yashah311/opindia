@@ -29,10 +29,9 @@ class HTMLCleaner:
                 logger.warning(f"Could not extract content from {url}")
                 return None
             
-            # ટ્રાફિલેતુરાના અનિચ્છનીય એન્ટિટીઝ સાફ કરો
-            extracted = re.sub(r'&\s*&\s*&\s*&\s*&\s*&', '', extracted)
-            extracted = re.sub(r'&\s*&', '', extracted)
-            extracted = re.sub(r'&amp;|\bamp\b|&quot;', '', extracted)
+            # FIX: Use clean HTML decoding boundaries instead of blind string stripping
+            extracted = html.unescape(extracted)
+            extracted = re.sub(r'(?:&amp;nbsp;|&nbsp;)+', ' ', extracted)
             
             soup = BeautifulSoup(extracted, 'html.parser')
             

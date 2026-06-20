@@ -33,10 +33,16 @@ class CategoryScraper:
         """Save scraping progress"""
         with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
             json.dump(progress, f, ensure_ascii=False, indent=2)
-    
+            
+    def _normalize_category_info(self, category_key):
+        """Safe extraction fallback that accounts for case mismatches in config dictionaries"""
+        for key, value in CATEGORIES.items():
+            if key.lower() == category_key.lower():
+                return value
+        return {'name_english': category_key.capitalize(), 'url': f'/category/{category_key.lower()}/'}
     def scrape_category(self, category_key, category_info, max_pages=None, is_demo_mode=False):
-        """Scrape literal chronological stream articles from the primary layout grid column, ignoring featured carousels"""
-        logger.info(f"Starting URL discovery for {category_key} ({category_info['name_english']})...")
+        """Scrape literal chronological stream articles from the primary layout grid column"""
+        logger.info(f"Starting URL discovery for {category_key} ({category_info.get('name_english', category_key)})...")
         
         category_url = urljoin(BASE_URL, category_info['url'])
         articles = []
@@ -45,12 +51,7 @@ class CategoryScraper:
         
         while True:
             try:
-                # Build pagination URL
-                if page == 1:
-                    url = category_url
-                else:
-                    url = f"{category_url}page/{page}/"
-                
+                url = category_url if page == 1 else f"{category_url}page/{page}/"
                 logger.info(f"  Fetching page {page}: {url}")
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
                 response.encoding = 'utf-8'
@@ -65,8 +66,6 @@ class CategoryScraper:
                     continue
                 
                 soup = BeautifulSoup(response.content, 'lxml')
-                
-                # === SURGICAL SELECTOR: TARGET ONLY THE PRIMARY CHRONOLOGICAL CHANNELS ===
                 for header_menu in soup.find_all(class_=['td-header-menu-wrap', 'td-header-sp-container', 'td-mobile-nav']):
                     header_menu.decompose()
                 
@@ -93,13 +92,10 @@ class CategoryScraper:
                     articles.append({
                         'url': initial_url,
                         'title': article_title,
-                        'category': category_key,
+                        'category': category_key.lower(),
                         'scraped_date': datetime.now().isoformat()
                     })
                     page_articles += 1
-                    
-                    if page_articles >= 10:
-                        break
                 
                 logger.info(f"  Page {page}: Found exactly {page_articles} real stream feed articles")
                 consecutive_errors = 0
@@ -115,43 +111,34 @@ class CategoryScraper:
                 logger.error(f"  Error on page {page}: {e}")
                 consecutive_errors += 1
                 if consecutive_errors > 3:
-                    logger.warning(f"  Too many errors. Stopping category {category_key}")
                     break
                 time.sleep(RATE_LIMIT_DELAY * 2)
                 page += 1
         
         logger.info(f"✓ {category_key}: Found {len(articles)} total stream elements")
         return articles
+
     def scrape_all_categories(self, specific_category=None, max_pages=None):
         """Scrape all categories or a specific one"""
         progress = self.load_progress()
-        
-        # Ensure discovered_urls namespace section is initialized cleanly inside state cache
         if 'discovered_urls' not in progress:
             progress['discovered_urls'] = {}
             
-        categories_to_scrape = [specific_category] if specific_category else CATEGORIES.keys()
+        categories_to_scrape = [specific_category.lower()] if specific_category else [k.lower() for k in CATEGORIES.keys()]
         
         for category_key in categories_to_scrape:
-            if category_key not in CATEGORIES:
-                logger.error(f"Unknown category: {category_key}")
-                continue
-            
+            category_info = self._normalize_category_info(category_key)
             if progress.get(f'{category_key}_completed') and not specific_category:
                 logger.info(f"Skipping {category_key} (already completed)")
                 continue
             
-            category_info = CATEGORIES[category_key]
             articles = self.scrape_category(category_key, category_info, max_pages, is_demo_mode=bool(specific_category))
-            
             self.articles[category_key] = articles
             
-            # === FIXED: Explicitly write the chronological list of articles into progress JSON ===
             progress['discovered_urls'][category_key] = articles
             progress[f'{category_key}_completed'] = True
             progress[f'{category_key}_count'] = len(articles)
             progress['last_updated'] = datetime.now().isoformat()
-            
             self.save_progress(progress)
         
         return self.articles
@@ -159,11 +146,7 @@ class CategoryScraper:
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     scraper = CategoryScraper()
-    articles = scraper.scrape_all_categories()
-    
-    print(f"\n✓ Total articles discovered: {sum(len(v) for v in articles.values())}")
-    for cat, arts in articles.items():
-        print(f"  {cat}: {len(arts)} articles")
+    scraper.scrape_all_categories()
 
 if __name__ == '__main__':
     main()
