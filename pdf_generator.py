@@ -149,11 +149,7 @@ class PDFGenerator:
         </div>
         """
         
-        footer = f"""
-        <div style="margin-top: 30px; border-top: 1px dashed #aaa; padding-top: 8px; font-size: 9pt; color: #555; width: 100%;">
-            <p>Archived: OpIndia Gujarati News Archive</p>
-        </div>
-        """
+        footer = ""
         
         return f"""
         <!DOCTYPE html>

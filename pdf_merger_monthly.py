@@ -1,5 +1,5 @@
 """
-Group articles by publication month and merge into monthly PDFs per category chronologically
+Group articles by publication month and merge into monthly PDFs per category continuously (Infinite Scroll)
 """
 import logging
 import os
@@ -45,24 +45,24 @@ class PDFMergerMonthly:
                 'CoverTitle',
                 parent=styles['Normal'],
                 fontName='Helvetica',
-                fontSize=16,
-                textColor='#222222',
-                spaceAfter=20,
+                fontSize=18,
+                textColor='#111111',
+                spaceAfter=25,
                 alignment=TA_CENTER
             )
             
             story = []
-            story.append(Spacer(1, 1.5*inch))
+            story.append(Spacer(1, 2.5*inch))
             story.append(Paragraph("OpIndia Gujarati News Archive", custom_style))
-            story.append(Spacer(1, 0.25*inch))
+            story.append(Spacer(1, 0.3*inch))
             story.append(Paragraph(f"Category: {category_name_english}", custom_style))
             story.append(Paragraph(f"Month: {month_str}", custom_style))
-            story.append(Spacer(1, 0.25*inch))
+            story.append(Spacer(1, 0.3*inch))
             story.append(Paragraph(f"Total Articles: {article_count}", custom_style))
             story.append(Spacer(1, 0.5*inch))
             story.append(Paragraph(
                 f"Archived on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                ParagraphStyle('Footer1', parent=styles['Normal'], fontSize=9)
+                ParagraphStyle('Footer1', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER)
             ))
             
             doc.build(story)
@@ -70,58 +70,22 @@ class PDFMergerMonthly:
         except Exception as e:
             logger.error(f"Error creating cover page: {e}")
             return None
-    
-    def merge_pdfs_for_month(self, pdf_paths, output_path, category_key, month_str, article_count):
-        """Merge multiple PDFs into one continuously with zero extra blank sheets"""
-        try:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            cover_path = self.create_cover_page(category_key, month_str, article_count)
-            pdf_writer = PdfWriter()
-            
-            if cover_path and os.path.exists(cover_path):
-                cover_reader = PdfReader(cover_path)
-                for page in cover_reader.pages:
-                    pdf_writer.add_page(page)
-            
-            # === SPACE OPTIMIZATION FIX ===
-            # Read and add pages sequentially without padding out odd-numbered page margins
-            for pdf_path in pdf_paths:
-                if os.path.exists(pdf_path):
-                    try:
-                        reader = PdfReader(pdf_path)
-                        for page in reader.pages:
-                            pdf_writer.add_page(page)
-                    except Exception as e:
-                        logger.warning(f"Could not add {pdf_path}: {e}")
-            
-            with open(output_path, 'wb') as f:
-                pdf_writer.write(f)
-            
-            file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            logger.info(f"✓ Merged Concise PDF: {output_path} ({file_size_mb:.2f} MB)")
-            
-            if cover_path and os.path.exists(cover_path):
-                try: os.remove(cover_path)
-                except Exception: pass
-                
-            return output_path
-        except Exception as e:
-            logger.error(f"Error merging PDFs: {e}")
-            return None
     def merge_by_month(self, category_key):
-        """Processes and merges every file found in the category cache folder chronologically"""
+        """Processes and compiles every file found in the category cache folder chronologically into a single layout"""
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            pdf_dir = os.path.join(base_dir, 'cache', 'individual_pdfs', category_key.lower())
+            html_dir = os.path.join(HTML_CACHE_DIR, category_key.lower())
             
-            if not os.path.exists(pdf_dir):
-                return 0
-                
-            pdf_files = list(Path(pdf_dir).glob('*.pdf'))
-            if not pdf_files:
-                return 0
+            # Setup final unified output path directories
+            category_info = CATEGORIES.get(category_key, {})
+            category_name_english = category_info.get('name_english', category_key)
+            month_str = "2026-06"
+            output_filename = f'OpIndia_Gujarati_{category_name_english}_{month_str}.pdf'
+            output_path = os.path.join(MONTHLY_PDF_DIR, category_name_english, output_filename)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            discovery_order = []
+            # Load the pristine title and playlist dictionary array mapping states from progress data JSON
+            ordered_articles_meta = []
             try:
                 if os.path.exists(PROGRESS_FILE):
                     with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
@@ -134,68 +98,150 @@ class PDFMergerMonthly:
                         discovered_list = progress_data['politics']
                         
                     for item in discovered_list:
-                        url_str = ""
                         if isinstance(item, dict):
                             url_str = item.get('url', '')
-                        elif isinstance(item, str):
-                            url_str = item
-                        
-                        if url_str:
-                            url_hash = hashlib.md5(url_str.encode('utf-8')).hexdigest()[:8]
-                            discovery_order.append(url_hash)
+                            title_str = item.get('title', 'ઑપઇન્ડિયા લેખ')
+                            if url_str:
+                                url_hash = hashlib.md5(url_str.encode('utf-8')).hexdigest()[:8]
+                                ordered_articles_meta.append({
+                                    'hash': url_hash,
+                                    'title': title_str,
+                                    'url': url_str
+                                })
             except Exception as p_err:
-                logger.warning(f"Could not calculate index arrays: {p_err}")
+                logger.warning(f"Could not extract structural index mapping arrays: {p_err}")
 
-            dated_pdfs = []
-            logger.info(f"🔍 Timeline Scanning: Sorting {category_key} via streaming feed indices...")
+            if not ordered_articles_meta:
+                logger.error("❌ No discovered URL tracks found in progress data. Run category_scraper first.")
+                return 0
+
+            # === STITCHING ENGINE: GENERATE CONTINUOUS INFINITE SCROLL CANVAS HTML ===
+            master_html_payload = ""
+            valid_article_count = 0
             
-            for p_path in pdf_files:
-                base_name = p_path.stem
-                sort_priority = discovery_order.index(base_name) if base_name in discovery_order else 999
-                mtime_date = datetime.fromtimestamp(os.path.getmtime(p_path))
+            from pdf_generator import PDFGenerator
+            generator = PDFGenerator()
+            
+            logger.info(f"🚀 Infinite Scroll Matrix: Compiling {len(ordered_articles_meta)} items into a single text flow layout...")
+            
+            for idx, meta in enumerate(ordered_urls_meta := ordered_articles_meta):
+                html_path = os.path.join(html_dir, f"{meta['hash']}.html")
                 
-                dated_pdfs.append({
-                    'date': mtime_date,
-                    'priority': sort_priority,
-                    'path': str(p_path),
-                    'name': base_name
-                })
-            
-            dated_pdfs.sort(key=lambda x: x['priority'])
-            
-            logger.info(f"📋 Stream Grid Sequence Verification for {category_key}:")
-            for idx, item in enumerate(dated_pdfs[:5], 1):
-                logger.info(f"   [{idx}] {item['name']}.pdf ➔ Web Position Sequence: {item['priority']}")
+                if not os.path.exists(html_path):
+                    continue
+                    
+                with open(html_path, 'r', encoding='utf-8') as f:
+                    raw_html = f.read()
                 
-            sorted_pdf_paths = [item['path'] for item in dated_pdfs]
+                # Strip metadata loops to clean up text channels
+                clean_html_text = re.sub(r'<[^>]+>', ' ', raw_html)
+                clean_html_text = ' '.join(clean_text := clean_html_text.split())
+                
+                # Highly flexible regex matching pattern to isolate the author and date strings from cleaned segments
+                author_name = "ઑપઇન્ડિયા સ્ટાફ"
+                pub_date = "June 2026"
+                
+                meta_match = re.search(r'(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})\s*[\s\u2502\u007c:-]\s*([A-Za-z\s]+)', clean_html_text)
+                if not meta_match:
+                    meta_match = re.search(r'([A-Za-z\s]+)\s*-\s*(\d{1,2}\s+[A-Za-z]+,?\s+\d{4})', clean_html_text)
+                    
+                if meta_match:
+                    if ',' in meta_match.group(1):
+                        pub_date = meta_match.group(1).strip()
+                        author_name = meta_match.group(2).strip()
+                    else:
+                        author_name = meta_match.group(1).strip()
+                        pub_date = meta_match.group(2).strip()
+                
+                # Inject the clean custom title metadata header rows right inside the continuous text stream canvas
+                article_header_block = f"""
+                <div class="article-header-block" style="margin-top: 35px; margin-bottom: 20px; border-bottom: 2px solid #111; padding-bottom: 10px; page-break-inside: avoid;">
+                    <div class="article-main-title" style="font-size: 16pt !important; font-weight: bold !important; color: #000 !important; text-align: left !important;">Article Title: {meta['title']}</div>
+                    <div class="meta-row" style="font-size: 10.5pt; color: #222; margin: 3px 0; text-align: left !important;"><span style="font-weight: bold;">Author:</span> {author_name}</div>
+                    <div class="meta-row" style="font-size: 10.5pt; color: #222; margin: 3px 0; text-align: left !important;"><span style="font-weight: bold;">Date:</span> {pub_date}</div>
+                </div>
+                """
+                
+                # Parse with BeautifulSoup to strip out duplicated header nodes or residual web elements safely
+                soup = BeautifulSoup(raw_html, 'html.parser')
+                for h1_tag in soup.find_all('h1'):
+                    h1_tag.decompose()
+                for bad_meta in soup.find_all(class_=re.compile(r'meta|author|date|sharing|crumbs', re.I)):
+                    bad_meta.decompose()
+                    
+                clean_body_segment = str(soup)
+                
+                # Append the clean header block and body segment continuously
+                master_html_payload += f"\n{article_header_block}\n{clean_body_segment}\n"
+                valid_article_count += 1
+
+            if valid_article_count == 0:
+                logger.error("❌ No individual article HTML files found to compile.")
+                return 0
+
+            # Construct the complete master HTML layout string context
+            full_wrapped_html = f"""
+            <!DOCTYPE html>
+            <html lang="gu">
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: 'Gujarati', sans-serif; margin: 25px; background: white; color: #111; line-height: 1.6; font-size: 11pt; width: 100%; }}
+                    p {{ margin: 12px 0 !important; text-align: left !important; word-wrap: break-word !important; width: 100% !important; display: block !important; }}
+                    h2, h3 {{ margin: 18px 0 8px 0 !important; text-align: left !important; width: 100% !important; }}
+                    img, svg, video, figure, .article-footer, .metadata_footer {{ display: none !important; height: 0 !important; opacity: 0 !important; }}
+                </style>
+            </head>
+            <body>
+                {master_html_payload}
+            </body>
+            </html>
+            """
             
-            category_info = CATEGORIES.get(category_key, {})
-            category_name_english = category_info.get('name_english', category_key)
+            # 1. Render and generate the single infinite-scroll text body document
+            temp_body_pdf = os.path.join(os.path.dirname(output_path), "temp_body.pdf")
+            generator.convert_sync(full_wrapped_html, temp_body_pdf, "https://opindia.com")
             
-            month_str = "2026-06"
-            output_filename = f'OpIndia_Gujarati_{category_name_english}_{month_str}.pdf'
-            output_path = os.path.join(MONTHLY_PDF_DIR, category_name_english, output_filename)
+            # 2. Render the single cover page document cleanly
+            cover_pdf_path = self.create_cover_page(category_key, month_str, valid_article_count)
             
-            merged_pdf = self.merge_pdfs_for_month(
-                pdf_paths=sorted_pdf_paths,
-                output_path=output_path,
-                category_key=category_key,
-                month_str=month_str,
-                article_count=len(sorted_pdf_paths)
-            )
+            # 3. Stitch them together cleanly into ONE SINGLE PDF
+            pdf_writer = PdfWriter()
             
-            if merged_pdf:
-                self.metadata.append({
-                    'category': category_name_english,
-                    'month': month_str,
-                    'article_count': len(sorted_pdf_paths),
-                    'file_size_mb': f"{os.path.getsize(output_path)/(1024*1024):.2f}",
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                })
-                return len(sorted_pdf_paths)
-            return 0
+            if cover_pdf_path and os.path.exists(cover_pdf_path):
+                cover_reader = PdfReader(cover_path := cover_pdf_path)
+                for page in cover_reader.pages:
+                    pdf_writer.add_page(page)
+                    
+            if os.path.exists(temp_body_pdf):
+                body_reader = PdfReader(temp_body_pdf)
+                for page in body_reader.pages:
+                    pdf_writer.add_page(page)
+            
+            # Save the final consolidated archive document
+            with open(output_path, 'wb') as f:
+                pdf_writer.write(f)
+                
+            # Clean up temporary layout sheets
+            for temp_sheet in [cover_pdf_path, temp_body_pdf]:
+                if temp_sheet and os.path.exists(temp_sheet):
+                    try: os.remove(temp_sheet)
+                    except Exception: pass
+            
+            file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(f"✓ Created Unified Infinite-Scroll PDF: {output_path} ({file_size_mb:.2f} MB)")
+            
+            self.metadata.append({
+                'category': category_name_english,
+                'month': month_str,
+                'article_count': valid_article_count,
+                'file_size_mb': f"{file_size_mb:.2f}",
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            return valid_article_count
+            
         except Exception as e:
-            logger.error(f"Error sorting/merging {category_key}: {e}")
+            logger.error(f"Error executing infinite scroll compiling loop for {category_key}: {e}")
             return 0
 
     def merge_all_categories(self):
@@ -208,7 +254,7 @@ class PDFMergerMonthly:
             
         logger.info(f"✓ Total articles merged: {total_merged}")
         
-        if self.metadata:
+        if self.metadata:        
             os.makedirs(METADATA_DIR, exist_ok=True)
             metadata_file = os.path.join(METADATA_DIR, 'archive_metadata.csv')
             try:
@@ -222,9 +268,13 @@ class PDFMergerMonthly:
                 logger.error(f"Failed to save metadata log file: {e}")
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     merger = PDFMergerMonthly()
     merger.merge_all_categories()
+
 
 if __name__ == '__main__':
     main()
